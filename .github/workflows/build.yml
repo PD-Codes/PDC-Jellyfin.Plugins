@@ -13,8 +13,10 @@ name: build
 # dropdown. That alone only builds - same as a branch push. To ALSO cut a release without
 # waiting on a tag push, additionally fill in "release_tag" with the exact tag this
 # release would have had (e.g. "pdcodesapi-v1.0.0.0"). Only the matrix entry matching
-# "plugin" runs at all for a manual dispatch; every other plugin is skipped rather than
-# built for nothing.
+# "plugin" actually does anything for a manual dispatch; every other plugin's job still
+# spins up (the "matrix" context is not available in a job-level "if" - only in a step's -
+# so there is no way to stop the OTHER jobs being scheduled at all) but every one of its
+# steps is skipped via the gate step below, so nothing is built or released for them.
 #
 # What this workflow deliberately does NOT do: update manifest.json's checksum/timestamp
 # for you. jprm and Jellyfin's repository format need the MD5 of the exact ZIP that was
@@ -64,12 +66,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # For a manual dispatch, only the chosen plugin's matrix entry runs at all - every
-    # other plugin is skipped outright rather than built for nothing. Push/PR triggers
-    # have no such input (it is only defined under workflow_dispatch), so this condition
-    # is simply true for them and every matrix entry runs as before.
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.plugin == matrix.plugin.id
-
     strategy:
       # One matrix entry per plugin in this repo. Adding a plugin means adding an entry
       # here AND a new option under workflow_dispatch.inputs.plugin above - see
@@ -86,16 +82,36 @@ jobs:
             zip_name: pdcodesapi.zip
 
     steps:
+      - name: Gate on selected plugin (${{ matrix.plugin.id }})
+        # The "matrix" context is only available in a STEP's "if", not a job's - putting
+        # this check at the job level is a hard workflow-parse error ("Unrecognized
+        # named-value: 'matrix'"), which is why it lives here instead. Every other step
+        # below reads this step's output; for a manual dispatch of a DIFFERENT plugin they
+        # all skip, so this matrix entry's job still gets scheduled but does nothing.
+        # Push/PR triggers have no such input at all, so should_run is always true for them.
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+             && [ "${{ github.event.inputs.plugin }}" != "${{ matrix.plugin.id }}" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Validate manual release tag (${{ matrix.plugin.id }})
-        # Only reached on a manual dispatch that also asked for a release. Refuses a
-        # release_tag that does not start with THIS plugin's own prefix - e.g. picking
-        # "PdCodesApi" from the dropdown but pasting a different plugin's tag - rather
-        # than silently cutting a release under a tag that does not match what is inside
-        # the ZIP. A crash here is the right outcome; a wrongly-named release is not.
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+        # Only reached on a manual dispatch of THIS plugin that also asked for a release.
+        # Refuses a release_tag that does not start with THIS plugin's own prefix - e.g.
+        # picking "PdCodesApi" from the dropdown but pasting a different plugin's tag -
+        # rather than silently cutting a release under a tag that does not match what is
+        # inside the ZIP. A crash here is the right outcome; a wrongly-named release is not.
+        if: >
+          steps.gate.outputs.should_run == 'true'
+          && github.event_name == 'workflow_dispatch'
+          && github.event.inputs.release_tag != ''
         run: |
           set -euo pipefail
           case "${{ github.event.inputs.release_tag }}" in
@@ -109,17 +125,20 @@ jobs:
       - name: Set up .NET 8
         # Jellyfin 10.10.x targets .NET 8. Building against a newer SDK's default
         # framework produces a DLL the server loads and then skips.
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
       - name: Restore (${{ matrix.plugin.id }})
+        if: steps.gate.outputs.should_run == 'true'
         run: dotnet restore ${{ matrix.plugin.project }}
 
       - name: Build (${{ matrix.plugin.id }})
         # -warnaserror is intentional. This project cannot be tested against a live
         # Jellyfin in CI, so the compiler is the only automated check there is; letting
         # warnings accumulate throws that away.
+        if: steps.gate.outputs.should_run == 'true'
         run: >
           dotnet build ${{ matrix.plugin.project }}
           --configuration Release
@@ -127,6 +146,7 @@ jobs:
           -warnaserror
 
       - name: Publish (${{ matrix.plugin.id }})
+        if: steps.gate.outputs.should_run == 'true'
         run: >
           dotnet publish ${{ matrix.plugin.project }}
           --configuration Release
@@ -137,6 +157,7 @@ jobs:
         # Only the plugin assembly goes in the ZIP. Jellyfin supplies its own
         # MediaBrowser.* assemblies at runtime; shipping copies of them is how a plugin
         # ends up loading a different version of the very types it is implementing.
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           set -euo pipefail
           mkdir -p ./artifact
@@ -148,6 +169,7 @@ jobs:
           md5sum ${{ matrix.plugin.zip_name }}
 
       - name: Upload artifact (${{ matrix.plugin.id }})
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: jellyfin-plugin-${{ matrix.plugin.tag_prefix }}
@@ -159,6 +181,7 @@ jobs:
         # tag push already has it in the ref, a manual dispatch has no ref to read it
         # from and must use the "release_tag" input instead. Computed once here so the
         # release step below has a single, uniform value regardless of which triggered it.
+        if: steps.gate.outputs.should_run == 'true'
         id: resolve_tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -168,30 +191,32 @@ jobs:
           fi
 
       - name: Publish GitHub Release (${{ matrix.plugin.id }})
-        # Gated on: a tag push whose prefix matches THIS matrix entry's plugin, OR a
-        # manual dispatch that chose this plugin AND supplied a release_tag (already
-        # validated above to carry the right prefix). This is the only step with
+        # Gated on: this matrix entry being the selected plugin, AND EITHER a tag push
+        # whose prefix matches it OR a manual dispatch that supplied a release_tag
+        # (already validated above to carry the right prefix). This is the only step with
         # contents:write in practice.
         #
-        # This is the one place in the workflow where "runs" and "does something"
-        # diverge, deliberately, and it is worth calling out explicitly: on a
-        # "pdcodesapi-v1.0.0.0" tag push, EVERY matrix entry still runs its build above
-        # (cheap, and it doubles as a build-sanity-check for every plugin in the repo on
-        # every tag push) - but only the entry whose tag_prefix is "pdcodesapi" reaches
-        # this step and actually creates a release / uploads an asset. Every other
-        # plugin's job for the same run ends after the artifact upload, having built
-        # successfully and released nothing. Do not read "the workflow ran" as "my
+        # This is the one place in the workflow where "runs" and "does something" diverge
+        # on a tag push, deliberately, and it is worth calling out explicitly: on a
+        # "pdcodesapi-v1.0.0.0" tag push, EVERY matrix entry's job still runs its build
+        # above (cheap, and it doubles as a build-sanity-check for every plugin in the
+        # repo on every tag push) - but only the entry whose tag_prefix is "pdcodesapi"
+        # reaches this step and actually creates a release / uploads an asset. Every
+        # other plugin's job for the same run ends after the artifact upload, having
+        # built successfully and released nothing. Do not read "the workflow ran" as "my
         # plugin's release was cut" - check which matrix entry's release step fired. A
-        # manual dispatch never has this ambiguity: only the chosen plugin's job runs at
-        # all (see the job-level "if" above), so there is nothing else to mistake it for.
+        # manual dispatch does not have this ambiguity in what gets RELEASED (only the
+        # chosen plugin's release_tag validation can pass), though every other plugin's
+        # job still runs its (skipped) steps per the gate step above.
         #
         # The release's tag becomes part of manifest.json's sourceUrl for this plugin
         # (.../releases/download/{tag}/{zip_name}), so the tag used here MUST be
         # "{tag_prefix}-v" + build.yaml's version exactly, or the manifest points at a
         # release that does not exist.
         if: >
-          startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
-          || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+          steps.gate.outputs.should_run == 'true'
+          && (startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
+              || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''))
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.resolve_tag.outputs.tag_name }}
