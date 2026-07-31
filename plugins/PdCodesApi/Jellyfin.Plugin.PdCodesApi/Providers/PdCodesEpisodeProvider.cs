@@ -167,7 +167,14 @@ public class PdCodesEpisodeProvider : IRemoteMetadataProvider<JellyfinEpisode, E
                 var absoluteRef = PdCodesIds.BuildAbsoluteEpisodeRef(info.IndexNumber.Value);
 
                 var fallbackEpisode = await TryAbsoluteFallbackAsync(
-                    client, PdCodesIds.TypeAnime, seriesUlid, primaryRef, absoluteRef, info, cancellationToken)
+                    client,
+                    PdCodesIds.TypeAnime,
+                    seriesUlid,
+                    primaryRef,
+                    absoluteRef,
+                    info.IndexNumber.Value,
+                    info.MetadataLanguage,
+                    cancellationToken)
                     .ConfigureAwait(false);
 
                 if (fallbackEpisode is not null)
@@ -300,11 +307,12 @@ public class PdCodesEpisodeProvider : IRemoteMetadataProvider<JellyfinEpisode, E
         string seriesUlid,
         string primaryRef,
         string absoluteRef,
-        EpisodeInfo info,
+        int episodeNumber,
+        string? metadataLanguage,
         CancellationToken cancellationToken)
     {
         var envelope = await client
-            .GetEpisodeEnvelopeAsync(type, seriesUlid, absoluteRef, info.MetadataLanguage, cancellationToken)
+            .GetEpisodeEnvelopeAsync(type, seriesUlid, absoluteRef, metadataLanguage, cancellationToken)
             .ConfigureAwait(false);
 
         var episode = envelope?.Data;
@@ -326,7 +334,14 @@ public class PdCodesEpisodeProvider : IRemoteMetadataProvider<JellyfinEpisode, E
             return null;
         }
 
-        if (!AgreesWithRequest(episode, requestedSeason: null, info.IndexNumber.Value, absoluteRef, _logger))
+        // Takes episodeNumber as a plain int, not the EpisodeInfo it came from: the caller
+        // only reaches this method after its own IndexNumber.HasValue check, but that
+        // guarantee does not cross a method boundary, and re-deriving ".Value" in here from
+        // a nullable field the compiler cannot see was proven would be exactly the kind of
+        // "this can't happen" this project's CLAUDE.md says to make structurally impossible
+        // instead of asserting. Taking the already-unwrapped int does that: there is no
+        // nullable value in this method left to be wrong about.
+        if (!AgreesWithRequest(episode, requestedSeason: null, episodeNumber, absoluteRef, _logger))
         {
             return null;
         }

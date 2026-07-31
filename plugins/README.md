@@ -67,10 +67,14 @@ build can even pass, while the plugin itself never becomes visible or reachable.
    once the workflow has printed the ZIP's MD5 — see the new plugin's own README for the exact
    steps.
 
-2. **`.github/workflows/build.yml`.** Add a new entry to the `strategy.matrix.include` list: `id`,
-   `tag_prefix`, `project` (path to the new plugin's `.csproj`), `assembly`, `zip_name`. Forgetting
-   this means the new plugin is **never built or released by CI** — pushing a tag for it does
-   nothing, silently; there is no error, because nothing was told to look for that tag.
+2. **`.github/workflows/build.yml`.** Add a new entry to the `strategy.matrix.plugin` list: `id`,
+   `tag_prefix`, `project` (path to the new plugin's `.csproj`), `assembly`, `zip_name` — AND add a
+   matching option to `workflow_dispatch.inputs.plugin`'s dropdown (its `id` must be typed
+   identically in both places; the job-level `if` compares them as plain strings). Forgetting the
+   matrix entry means the new plugin is **never built or released by CI** — pushing a tag for it
+   does nothing, silently; there is no error, because nothing was told to look for that tag.
+   Forgetting the dropdown option only means nobody can manually build/release it from the Actions
+   tab — tag pushes still work — but it is the same one-string-two-places trap either way.
 
 3. **This repo's tag-prefix convention.** Each plugin's GitHub Releases are told apart by a tag
    PREFIX unique to that plugin — e.g. `pdcodesapi-v1.0.0.0` for PdCodesApi. Pick a short,

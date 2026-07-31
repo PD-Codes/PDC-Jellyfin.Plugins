@@ -109,6 +109,13 @@ publishes to. If you forked the repo or want to host elsewhere, adjust step 3 be
    creates a GitHub Release with the ZIP attached — but only for a tag push; a branch
    push or a pull request never runs that step. The Package step's log line prints
    the ZIP's MD5.
+
+   **Without pushing a tag:** Actions tab → **build** → **Run workflow**, pick
+   `PdCodesApi` from the "plugin" dropdown, and fill "release_tag" with the same
+   `pdcodesapi-v1.0.0.0` string. Leaving "release_tag" empty just builds — useful as a
+   quick compile check on a branch without waiting for CI to run on push. Only
+   PdCodesApi's own job runs for either kind of manual dispatch; the other plugins in
+   this repo are skipped, not built for nothing.
 2. Edit `manifest.json`: `sourceUrl` already matches the release asset URL
    (`.../releases/download/pdcodesapi-v1.0.0.0/pdcodesapi.zip`) for version 1.0.0.0 —
    bump it alongside `version` on every release. Set `checksum` to the **MD5** the

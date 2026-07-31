@@ -5,9 +5,16 @@ name: build
 # convention) the matrix entry whose tag_prefix matches also publishes a GitHub Release
 # with that plugin's ZIP attached - that release asset is what manifest.json's sourceUrl
 # for that plugin points at (github.com/PD-Codes/PDC-Jellyfin.Plugins/releases/download/{tag}/{zip_name}).
-# Everything else (branch pushes, pull requests, workflow_dispatch, and every OTHER
-# matrix entry on a tag push) only builds and uploads a CI artifact; the release step is
-# gated on both the tag AND which plugin it names, and does not run otherwise.
+# Everything else (branch pushes, pull requests, and every OTHER matrix entry on a tag
+# push) only builds and uploads a CI artifact; the release step is gated on both the tag
+# AND which plugin it names, and does not run otherwise.
+#
+# MANUAL RUNS ("Run workflow" in the Actions tab): pick the plugin to build from the
+# dropdown. That alone only builds - same as a branch push. To ALSO cut a release without
+# waiting on a tag push, additionally fill in "release_tag" with the exact tag this
+# release would have had (e.g. "pdcodesapi-v1.0.0.0"). Only the matrix entry matching
+# "plugin" runs at all for a manual dispatch; every other plugin is skipped rather than
+# built for nothing.
 #
 # What this workflow deliberately does NOT do: update manifest.json's checksum/timestamp
 # for you. jprm and Jellyfin's repository format need the MD5 of the exact ZIP that was
@@ -15,7 +22,7 @@ name: build
 # value to compute in advance, and a workflow that pushes a manifest edit back into the
 # repository on your behalf is exactly the kind of thing this project's operator does not
 # want done silently. The Package step below prints the MD5; copy it into manifest.json
-# (and update "timestamp" and "version") by hand after each tagged release.
+# (and update "timestamp" and "version") by hand after each release, manual or tagged.
 
 on:
   push:
@@ -26,26 +33,49 @@ on:
     tags: [ '*-v*' ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Which plugin to build (must match a matrix "id" below)'
+        required: true
+        type: choice
+        options:
+          - PdCodesApi
+      release_tag:
+        description: >-
+          Optional. Set to "<tag_prefix>-v<version>" (e.g. "pdcodesapi-v1.0.0.0") to ALSO
+          create/update a GitHub Release for this run, without waiting on a tag push.
+          Leave empty to just build. Must start with the chosen plugin's own tag_prefix -
+          the workflow refuses to run otherwise rather than cut a release under the wrong name.
+        required: false
+        type: string
 
 permissions:
   contents: write
   # write is only exercised by the release step below, which only runs for the matrix
-  # entry whose tag_prefix matches the pushed tag. Branch pushes, pull requests, and
-  # every other matrix entry on a tag push never reach it and never write anything.
-  # This is broader than any single release step strictly needs (every matrix entry's
-  # job gets the same permission even though only one of them uses it) - splitting the
-  # release into its own job with a narrower token is a reasonable future pass, left out
-  # here as out of scope for this restructuring.
+  # entry whose tag_prefix matches the pushed tag (or, for a manual run, the chosen
+  # "plugin" input plus a non-empty "release_tag"). Branch pushes, pull requests, and
+  # every other matrix entry never reach it and never write anything. This is broader
+  # than any single release step strictly needs (every matrix entry's job gets the same
+  # permission even though only one of them uses it) - splitting the release into its own
+  # job with a narrower token is a reasonable future pass, left out here as out of scope
+  # for this restructuring.
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
+    # For a manual dispatch, only the chosen plugin's matrix entry runs at all - every
+    # other plugin is skipped outright rather than built for nothing. Push/PR triggers
+    # have no such input (it is only defined under workflow_dispatch), so this condition
+    # is simply true for them and every matrix entry runs as before.
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.plugin == matrix.plugin.id
+
     strategy:
       # One matrix entry per plugin in this repo. Adding a plugin means adding an entry
-      # here - see plugins/README.md, "what else must be updated when a plugin is added".
-      # Forgetting this entry is silent: the new plugin's folder can be complete and its
-      # own build.yaml correct, and CI simply never looks at it.
+      # here AND a new option under workflow_dispatch.inputs.plugin above - see
+      # plugins/README.md, "what else must be updated when a plugin is added". Forgetting
+      # either is silent: the new plugin's folder can be complete and its own build.yaml
+      # correct, and CI simply never looks at it (or never offers it in the dropdown).
       fail-fast: false
       matrix:
         plugin:
@@ -58,6 +88,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate manual release tag (${{ matrix.plugin.id }})
+        # Only reached on a manual dispatch that also asked for a release. Refuses a
+        # release_tag that does not start with THIS plugin's own prefix - e.g. picking
+        # "PdCodesApi" from the dropdown but pasting a different plugin's tag - rather
+        # than silently cutting a release under a tag that does not match what is inside
+        # the ZIP. A crash here is the right outcome; a wrongly-named release is not.
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+        run: |
+          set -euo pipefail
+          case "${{ github.event.inputs.release_tag }}" in
+            ${{ matrix.plugin.tag_prefix }}-v*) ;;
+            *)
+              echo "::error::release_tag '${{ github.event.inputs.release_tag }}' does not start with '${{ matrix.plugin.tag_prefix }}-v', which ${{ matrix.plugin.id }} requires. Refusing to create a mismatched release."
+              exit 1
+              ;;
+          esac
 
       - name: Set up .NET 8
         # Jellyfin 10.10.x targets .NET 8. Building against a newer SDK's default
@@ -107,9 +154,24 @@ jobs:
           path: ${{ matrix.plugin.zip_name }}
           if-no-files-found: error
 
+      - name: Resolve release tag (${{ matrix.plugin.id }})
+        # Tag-push and manual-dispatch releases need the tag from different places: a
+        # tag push already has it in the ref, a manual dispatch has no ref to read it
+        # from and must use the "release_tag" input instead. Computed once here so the
+        # release step below has a single, uniform value regardless of which triggered it.
+        id: resolve_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag_name=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish GitHub Release (${{ matrix.plugin.id }})
-        # Gated on BOTH the tag prefix matching THIS matrix entry's plugin AND it being a
-        # tag push at all - this is the only step with contents:write in practice.
+        # Gated on: a tag push whose prefix matches THIS matrix entry's plugin, OR a
+        # manual dispatch that chose this plugin AND supplied a release_tag (already
+        # validated above to carry the right prefix). This is the only step with
+        # contents:write in practice.
         #
         # This is the one place in the workflow where "runs" and "does something"
         # diverge, deliberately, and it is worth calling out explicitly: on a
@@ -119,14 +181,19 @@ jobs:
         # this step and actually creates a release / uploads an asset. Every other
         # plugin's job for the same run ends after the artifact upload, having built
         # successfully and released nothing. Do not read "the workflow ran" as "my
-        # plugin's release was cut" - check which matrix entry's release step fired.
+        # plugin's release was cut" - check which matrix entry's release step fired. A
+        # manual dispatch never has this ambiguity: only the chosen plugin's job runs at
+        # all (see the job-level "if" above), so there is nothing else to mistake it for.
         #
         # The release's tag becomes part of manifest.json's sourceUrl for this plugin
-        # (.../releases/download/{tag}/{zip_name}), so the tag pushed here MUST be
+        # (.../releases/download/{tag}/{zip_name}), so the tag used here MUST be
         # "{tag_prefix}-v" + build.yaml's version exactly, or the manifest points at a
         # release that does not exist.
-        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
+        if: >
+          startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
+          || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.resolve_tag.outputs.tag_name }}
           files: ${{ matrix.plugin.zip_name }}
           generate_release_notes: true
