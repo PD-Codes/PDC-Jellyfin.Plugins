@@ -28,7 +28,10 @@ Every plugin here is published through the same self-hosted plugin repository, d
    `raw.githubusercontent.com/PD-Codes/PDC-Jellyfin.Plugins/main/manifest.json`.
 3. The plugins listed in the table above appear in the catalog; install whichever you need.
 
-`manifest.json`'s `checksum` and `timestamp` fields are **never filled in automatically** by any
-workflow in this repo — they are placeholders until updated by hand after each tagged release.
-See [`plugins/README.md`](plugins/README.md) for why, and each plugin's own README for the exact
-release steps.
+After a release is published, the workflow fills in that version's `checksum`, `timestamp` and
+`sourceUrl` in `manifest.json` itself and pushes the update to `main` — no manual copy-pasting of
+an MD5. What it will **not** do is invent a new plugin entry or a new `versions[]` entry: the entry
+for the version being released must already exist (added by hand, with its changelog text) before
+you tag, or the release step succeeds and this step fails loudly rather than guess. See
+[`plugins/README.md`](plugins/README.md) for why, and each plugin's own README for the exact release
+steps.

@@ -56,25 +56,31 @@ build can even pass, while the plugin itself never becomes visible or reachable.
 
 1. **Root `manifest.json`.** It is a flat JSON array of plugin objects — Jellyfin's repository
    format supports any number of them in one file. Append a new entry with the new plugin's own
-   GUID, name, description, and a `versions[]` array whose `sourceUrl` follows this repo's
-   tag-prefix convention (see below). **Forgetting this step means the plugin builds and releases
-   in CI but Jellyfin's catalog never lists it** — a plugin that exists and cannot be found is
-   invisible in exactly the way this project is careful never to be: no error, no log, just a
-   catalog that looks complete without it.
+   GUID, name, description, and a `versions[]` array with a placeholder `checksum`/`timestamp`
+   entry for the version you are about to release (leave those two fields as any placeholder
+   text — CI overwrites them). Its `sourceUrl` should already follow this repo's tag-prefix
+   convention (see below), even before the release exists. **Forgetting this step means the
+   plugin builds and releases in CI but Jellyfin's catalog never lists it** — a plugin that
+   exists and cannot be found is invisible in exactly the way this project is careful never to
+   be: no error, no log, just a catalog that looks complete without it.
 
-   `manifest.json`'s `checksum` and `timestamp` fields are **never filled in automatically** for
-   any plugin, single- or multi-plugin repo alike. Fill them in by hand after each tagged release,
-   once the workflow has printed the ZIP's MD5 — see the new plugin's own README for the exact
-   steps.
+   After a release is published, `.github/workflows/build.yml` fills in that version's
+   `checksum`, `timestamp` and `sourceUrl` itself (`.github/scripts/update_manifest.py`) and
+   pushes the update to `main` as `github-actions[bot]`. It does **not** invent the `versions[]`
+   entry itself — changelog text is a human decision — so that entry (version/changelog/
+   targetAbi, with placeholder checksum/timestamp) must exist before you tag, or this step fails
+   loudly instead of guessing at what to write.
 
 2. **`.github/workflows/build.yml`.** Add a new entry to the `strategy.matrix.plugin` list: `id`,
    `tag_prefix`, `project` (path to the new plugin's `.csproj`), `assembly`, `zip_name` — AND add a
    matching option to `workflow_dispatch.inputs.plugin`'s dropdown (its `id` must be typed
-   identically in both places; the job-level `if` compares them as plain strings). Forgetting the
-   matrix entry means the new plugin is **never built or released by CI** — pushing a tag for it
-   does nothing, silently; there is no error, because nothing was told to look for that tag.
-   Forgetting the dropdown option only means nobody can manually build/release it from the Actions
-   tab — tag pushes still work — but it is the same one-string-two-places trap either way.
+   identically in both places; the "Gate on selected plugin" step compares them as plain
+   strings — this lives in a step rather than the job's own `if` because the `matrix` context is
+   not available there at all, a hard workflow-parse error if you try). Forgetting the matrix
+   entry means the new plugin is **never built or released by CI** — pushing a tag for it does
+   nothing, silently; there is no error, because nothing was told to look for that tag. Forgetting
+   the dropdown option only means nobody can manually build/release it from the Actions tab — tag
+   pushes still work — but it is the same one-string-two-places trap either way.
 
 3. **This repo's tag-prefix convention.** Each plugin's GitHub Releases are told apart by a tag
    PREFIX unique to that plugin — e.g. `pdcodesapi-v1.0.0.0` for PdCodesApi. Pick a short,

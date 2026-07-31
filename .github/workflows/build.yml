@@ -18,13 +18,13 @@ name: build
 # so there is no way to stop the OTHER jobs being scheduled at all) but every one of its
 # steps is skipped via the gate step below, so nothing is built or released for them.
 #
-# What this workflow deliberately does NOT do: update manifest.json's checksum/timestamp
-# for you. jprm and Jellyfin's repository format need the MD5 of the exact ZIP that was
-# uploaded, and computing that requires the build to already have happened - there is no
-# value to compute in advance, and a workflow that pushes a manifest edit back into the
-# repository on your behalf is exactly the kind of thing this project's operator does not
-# want done silently. The Package step below prints the MD5; copy it into manifest.json
-# (and update "timestamp" and "version") by hand after each release, manual or tagged.
+# AFTER a release is published, the workflow ALSO updates manifest.json itself: it fills
+# in checksum/timestamp/sourceUrl on the matching plugin+version entry using
+# .github/scripts/update_manifest.py, commits as github-actions[bot], and pushes straight
+# to "main". It deliberately does NOT invent a new versions[] entry or a new plugin
+# entry - changelog text is a human decision, not something to synthesize - so the
+# entry for the version being released must already exist in manifest.json (added by
+# hand before tagging) or this step fails loudly rather than guess at it.
 
 on:
   push:
@@ -217,8 +217,54 @@ jobs:
           steps.gate.outputs.should_run == 'true'
           && (startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
               || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''))
+        id: publish_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.resolve_tag.outputs.tag_name }}
           files: ${{ matrix.plugin.zip_name }}
           generate_release_notes: true
+
+      - name: Update manifest.json for this release (${{ matrix.plugin.id }})
+        # Gated on "steps.publish_release.outcome == 'success'" rather than re-deriving
+        # the tag/dispatch condition above a second time: reusing the release step's own
+        # outcome means there is exactly one place that decides whether a release
+        # happened, instead of two independently maintained copies of that boolean that
+        # could drift apart.
+        #
+        # Switches to the tip of "main" before editing: this job's own checkout may be a
+        # detached tag commit (on a tag push) or an older commit (on a manual dispatch
+        # against a stale branch), and manifest.json must be edited and committed against
+        # the repository's actual current state, not whatever commit happened to trigger
+        # this run. The already-built ZIP sits in the workspace as an untracked file and
+        # is unaffected by the branch switch, so its checksum stays valid.
+        if: steps.gate.outputs.should_run == 'true' && steps.publish_release.outcome == 'success'
+        run: |
+          set -euo pipefail
+
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          ZIP="${{ matrix.plugin.zip_name }}"
+          MD5=$(md5sum "$ZIP" | cut -d' ' -f1)
+          GUID=$(grep -m1 '^guid:' "plugins/${{ matrix.plugin.id }}/build.yaml" \
+            | sed -E 's/^guid:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/')
+          VERSION=$(grep -m1 '^version:' "plugins/${{ matrix.plugin.id }}/build.yaml" \
+            | sed -E 's/^version:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/')
+          TAG="${{ steps.resolve_tag.outputs.tag_name }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ZIP}"
+
+          echo "Updating manifest.json: guid=$GUID version=$VERSION checksum=$MD5"
+          python3 .github/scripts/update_manifest.py "$GUID" "$VERSION" "$MD5" "$TIMESTAMP" "$SOURCE_URL"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+
+          if git diff --cached --quiet; then
+            echo "manifest.json already matches this release; nothing to commit."
+          else
+            git commit -m "chore(manifest): ${{ matrix.plugin.id }} ${TAG} - checksum and timestamp"
+            git push origin HEAD:main
+          fi

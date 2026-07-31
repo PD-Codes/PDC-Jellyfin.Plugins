@@ -116,12 +116,14 @@ publishes to. If you forked the repo or want to host elsewhere, adjust step 3 be
    quick compile check on a branch without waiting for CI to run on push. Only
    PdCodesApi's own job runs for either kind of manual dispatch; the other plugins in
    this repo are skipped, not built for nothing.
-2. Edit `manifest.json`: `sourceUrl` already matches the release asset URL
-   (`.../releases/download/pdcodesapi-v1.0.0.0/pdcodesapi.zip`) for version 1.0.0.0 —
-   bump it alongside `version` on every release. Set `checksum` to the **MD5** the
-   workflow printed (not SHA — Jellyfin's repository format uses MD5), and set
-   `timestamp`. None of this is done for you: a step that pushed this edit back into
-   the repo on its own is exactly the kind of thing this project avoids doing silently.
+2. Once the release is published, the workflow itself fills in that version's
+   `checksum` (the ZIP's MD5 — not SHA, Jellyfin's repository format uses MD5),
+   `timestamp` and `sourceUrl` in `manifest.json`, commits as `github-actions[bot]`, and
+   pushes straight to `main` — nothing to copy-paste. For a **version bump**: add the new
+   `versions[]` entry to `manifest.json` by hand first (version, changelog, targetAbi,
+   any placeholder checksum/timestamp) — this step only fills in those two fields on an
+   entry that already exists, it will not invent the changelog text for you, and fails
+   loudly if the entry is missing rather than guess.
 3. Host `manifest.json` at a stable URL — the raw GitHub URL to this file works
    (`raw.githubusercontent.com/PD-Codes/PDC-Jellyfin.Plugins/main/manifest.json`),
    or host it wherever you prefer if you point `sourceUrl` elsewhere too.
