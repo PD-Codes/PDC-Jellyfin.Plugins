@@ -1,0 +1,132 @@
+name: build
+
+# Builds and packages every plugin in this repository. On a tag matching "<prefix>-v*"
+# (a PLUGIN-PREFIXED tag, e.g. "pdcodesapi-v1.0.0.0" - see plugins/README.md for the
+# convention) the matrix entry whose tag_prefix matches also publishes a GitHub Release
+# with that plugin's ZIP attached - that release asset is what manifest.json's sourceUrl
+# for that plugin points at (github.com/PD-Codes/PDC-Jellyfin.Plugins/releases/download/{tag}/{zip_name}).
+# Everything else (branch pushes, pull requests, workflow_dispatch, and every OTHER
+# matrix entry on a tag push) only builds and uploads a CI artifact; the release step is
+# gated on both the tag AND which plugin it names, and does not run otherwise.
+#
+# What this workflow deliberately does NOT do: update manifest.json's checksum/timestamp
+# for you. jprm and Jellyfin's repository format need the MD5 of the exact ZIP that was
+# uploaded, and computing that requires the build to already have happened - there is no
+# value to compute in advance, and a workflow that pushes a manifest edit back into the
+# repository on your behalf is exactly the kind of thing this project's operator does not
+# want done silently. The Package step below prints the MD5; copy it into manifest.json
+# (and update "timestamp" and "version") by hand after each tagged release.
+
+on:
+  push:
+    branches: [ main, master ]
+    # Tag pattern is "<prefix>-v*", NOT bare "v*": tags are per-plugin-prefixed now that
+    # this repo can hold more than one plugin, and a bare "v1.0.0.0" would not say which
+    # plugin's release it is. See plugins/README.md for the tag-prefix convention.
+    tags: [ '*-v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # write is only exercised by the release step below, which only runs for the matrix
+  # entry whose tag_prefix matches the pushed tag. Branch pushes, pull requests, and
+  # every other matrix entry on a tag push never reach it and never write anything.
+  # This is broader than any single release step strictly needs (every matrix entry's
+  # job gets the same permission even though only one of them uses it) - splitting the
+  # release into its own job with a narrower token is a reasonable future pass, left out
+  # here as out of scope for this restructuring.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # One matrix entry per plugin in this repo. Adding a plugin means adding an entry
+      # here - see plugins/README.md, "what else must be updated when a plugin is added".
+      # Forgetting this entry is silent: the new plugin's folder can be complete and its
+      # own build.yaml correct, and CI simply never looks at it.
+      fail-fast: false
+      matrix:
+        plugin:
+          - id: PdCodesApi
+            tag_prefix: pdcodesapi
+            project: plugins/PdCodesApi/Jellyfin.Plugin.PdCodesApi/Jellyfin.Plugin.PdCodesApi.csproj
+            assembly: Jellyfin.Plugin.PdCodesApi
+            zip_name: pdcodesapi.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        # Jellyfin 10.10.x targets .NET 8. Building against a newer SDK's default
+        # framework produces a DLL the server loads and then skips.
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore (${{ matrix.plugin.id }})
+        run: dotnet restore ${{ matrix.plugin.project }}
+
+      - name: Build (${{ matrix.plugin.id }})
+        # -warnaserror is intentional. This project cannot be tested against a live
+        # Jellyfin in CI, so the compiler is the only automated check there is; letting
+        # warnings accumulate throws that away.
+        run: >
+          dotnet build ${{ matrix.plugin.project }}
+          --configuration Release
+          --no-restore
+          -warnaserror
+
+      - name: Publish (${{ matrix.plugin.id }})
+        run: >
+          dotnet publish ${{ matrix.plugin.project }}
+          --configuration Release
+          --no-build
+          --output ./publish
+
+      - name: Package (${{ matrix.plugin.id }})
+        # Only the plugin assembly goes in the ZIP. Jellyfin supplies its own
+        # MediaBrowser.* assemblies at runtime; shipping copies of them is how a plugin
+        # ends up loading a different version of the very types it is implementing.
+        run: |
+          set -euo pipefail
+          mkdir -p ./artifact
+          cp ./publish/${{ matrix.plugin.assembly }}.dll ./artifact/
+          cd ./artifact
+          zip -r ../${{ matrix.plugin.zip_name }} .
+          cd ..
+          echo "MD5 (for manifest.json checksum):"
+          md5sum ${{ matrix.plugin.zip_name }}
+
+      - name: Upload artifact (${{ matrix.plugin.id }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-plugin-${{ matrix.plugin.tag_prefix }}
+          path: ${{ matrix.plugin.zip_name }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (${{ matrix.plugin.id }})
+        # Gated on BOTH the tag prefix matching THIS matrix entry's plugin AND it being a
+        # tag push at all - this is the only step with contents:write in practice.
+        #
+        # This is the one place in the workflow where "runs" and "does something"
+        # diverge, deliberately, and it is worth calling out explicitly: on a
+        # "pdcodesapi-v1.0.0.0" tag push, EVERY matrix entry still runs its build above
+        # (cheap, and it doubles as a build-sanity-check for every plugin in the repo on
+        # every tag push) - but only the entry whose tag_prefix is "pdcodesapi" reaches
+        # this step and actually creates a release / uploads an asset. Every other
+        # plugin's job for the same run ends after the artifact upload, having built
+        # successfully and released nothing. Do not read "the workflow ran" as "my
+        # plugin's release was cut" - check which matrix entry's release step fired.
+        #
+        # The release's tag becomes part of manifest.json's sourceUrl for this plugin
+        # (.../releases/download/{tag}/{zip_name}), so the tag pushed here MUST be
+        # "{tag_prefix}-v" + build.yaml's version exactly, or the manifest points at a
+        # release that does not exist.
+        if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.plugin.zip_name }}
+          generate_release_notes: true

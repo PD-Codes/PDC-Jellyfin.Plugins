@@ -1,0 +1,21 @@
+[
+  {
+    "guid": "3f9c2a17-8d54-4e63-b0a1-5c7de2149f8b",
+    "name": "PD-Codes API",
+    "description": "Provides metadata and artwork for Movies, Series and Episodes from a private PD-Codes API v5 deployment. Identifies items by TMDB, IMDb, TheTVDB, MyAnimeList or AniList id where Jellyfin already has one, and falls back to a name search. Requires the API base URL to be configured; there is no public instance.",
+    "overview": "Metadata and images from a self-hosted PD-Codes API (v5) instance.",
+    "owner": "PD-Codes",
+    "category": "Metadata",
+    "imageUrl": "",
+    "versions": [
+      {
+        "version": "1.0.0.0",
+        "changelog": "Initial release. Movie, Series and Episode metadata; poster/backdrop/logo and episode-still images; search; id-based identification using the namespaced tmdb_movie/tmdb_tv and tvdb_series/tvdb_movie sources.",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/PD-Codes/PDC-Jellyfin.Plugins/releases/download/pdcodesapi-v1.0.0.0/pdcodesapi.zip",
+        "checksum": "REPLACE-WITH-MD5-OF-THE-ZIP",
+        "timestamp": "REPLACE-AFTER-RELEASE"
+      }
+    ]
+  }
+]

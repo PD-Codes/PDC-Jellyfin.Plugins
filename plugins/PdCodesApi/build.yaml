@@ -1,0 +1,35 @@
+---
+# Consumed by jprm (the Jellyfin Plugin Repository Manager) to build a versioned
+# plugin ZIP and to generate/extend a manifest.json for a self-hosted repository.
+#
+# The "guid" MUST equal Plugin.Id in Plugin.cs and the GUID in Configuration/configPage.html.
+# Three copies is unfortunate; there is no shared source for it, and a mismatch fails
+# silently in three different ways (update never offered / settings page saves nothing /
+# server treats an upgrade as a second plugin).
+name: "PD-Codes API"
+guid: "3f9c2a17-8d54-4e63-b0a1-5c7de2149f8b"
+version: "1.0.0.0"
+
+# targetAbi is the MINIMUM server version. 10.10.0.0 because every interface this plugin
+# implements was verified against 10.10.6 and 10.9 differs (notably IExternalId, where
+# UrlFormatString is not yet obsolete). A plugin declaring too low an ABI is loaded by a
+# server it cannot run on and fails at type-load time with no useful message.
+targetAbi: "10.10.0.0"
+framework: "net8.0"
+
+owner: "PD-Codes"
+overview: "Metadata and images from a self-hosted PD-Codes API (v5) instance."
+description: >
+  Provides metadata and artwork for Movies, Series and Episodes from a private
+  PD-Codes API v5 deployment. Identifies items by TMDB, IMDb, TheTVDB, MyAnimeList
+  or AniList id where Jellyfin already has one, and falls back to a name search.
+  Requires the API base URL to be configured; there is no public instance.
+
+category: "Metadata"
+artifacts:
+  - "Jellyfin.Plugin.PdCodesApi.dll"
+
+changelog: >
+  1.0.0.0 - Initial release. Movie, Series and Episode metadata; poster/backdrop/logo
+  and episode-still images; search; id-based identification using the namespaced
+  tmdb_movie/tmdb_tv and tvdb_series/tvdb_movie sources.

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>PD-Codes API</title>
+</head>
+<body>
+<div id="PdCodesApiConfigPage"
+     data-role="page"
+     class="page type-interior pluginConfigurationPage"
+     data-require="emby-input,emby-button,emby-checkbox,emby-select">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="PdCodesApiConfigForm">
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="url" id="ApiBaseUrl" name="ApiBaseUrl"
+                           label="API base URL" required />
+                    <div class="fieldDescription">
+                        The root of your PD-Codes API deployment, without the
+                        <code>/v5</code> suffix &mdash; for example
+                        <code>https://media.example.org/jikan</code>. There is deliberately no
+                        default: this plugin will not send your library to a server you did not
+                        choose. Until this is set, every provider logs a warning and returns
+                        nothing.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="PreferredLanguage" name="PreferredLanguage"
+                           label="Preferred metadata language (optional)" />
+                    <div class="fieldDescription">
+                        An ISO code such as <code>de</code>, <code>en</code> or <code>ja</code>.
+                        Leave empty to use each library's own metadata language, which is usually
+                        what you want on a server with libraries in more than one language.
+                        Sent as an <code>Accept-Language</code> header.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="Country" name="Country"
+                           label="Country (optional)" />
+                    <div class="fieldDescription">
+                        An ISO 3166-1 alpha-2 code such as <code>DE</code> or <code>US</code>.
+                        Selects which streaming availability and which age rating apply. When
+                        empty, no age rating is imported at all &mdash; a rating from the wrong
+                        country would drive parental controls incorrectly.
+                    </div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="AcceptUncertainMatches"
+                               name="AcceptUncertainMatches" />
+                        <span>Accept uncertain (title-matched) identifications</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        <strong>Off is recommended.</strong> The API flags some matches as
+                        guesses made by comparing titles. Accepting one binds your library item
+                        to that work permanently &mdash; the item then looks correctly identified
+                        and is never re-checked, even when it is the wrong show.
+                    </div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="PreferAnimeForSeries"
+                               name="PreferAnimeForSeries" />
+                        <span>Look under "anime" first for series</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Anime is not a separate item type in Jellyfin: an anime series is a
+                        Series and an anime film is a Movie. Both possible media are always
+                        tried; this only sets the order. Turn it on for a library that is mostly
+                        anime.
+                    </div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="PreferAnimeForMovies"
+                               name="PreferAnimeForMovies" />
+                        <span>Look under "anime" first for movies</span>
+                    </label>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="AbsoluteNumberingFallback"
+                               name="AbsoluteNumberingFallback" />
+                        <span>Fall back to absolute episode numbering (anime)</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Anime files numbered straight through the whole run
+                        (<code>Show - 62.mkv</code>) are normally filed by Jellyfin under
+                        <strong>Season 1</strong>, so the plugin asks the API for
+                        <code>S01E62</code>. On a show whose seasons do not restart at 1
+                        &mdash; One Piece season 2 is episodes 62&ndash;77 &mdash; that is a
+                        different, usually absent episode, and the file simply gets no
+                        metadata. With this on, such a miss is retried once as
+                        <code>E62</code>, and the answer is accepted <em>only</em> when the
+                        API reports that work's numbering as non-continuous. Season 1 and
+                        anime only. Cost: one extra request per episode that missed under
+                        both candidate types, paid once per episode &mdash; the absolute
+                        reference is then stored on the item, so later scans address it
+                        directly.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="RequestTimeoutSeconds"
+                           name="RequestTimeoutSeconds" label="Request timeout (seconds)"
+                           min="5" max="300" />
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                </div>
+
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        // This GUID must match Plugin.Id. Jellyfin looks the configuration up by it, and a
+        // mismatch produces a page that loads, saves without error, and persists nothing.
+        var PdCodesApiPluginId = "3f9c2a17-8d54-4e63-b0a1-5c7de2149f8b";
+
+        // Classic (non-module) page script. Jellyfin injects this page's markup into the
+        // dashboard and dispatches 'pageshow' on the container element; the "export default
+        // function (view)" module form used by some newer plugins requires
+        // <script type="module">, and inside a text/javascript block it is a hard syntax
+        // error that leaves the page rendered but completely inert.
+        (function () {
+            var page = document.querySelector('#PdCodesApiConfigPage');
+
+            page.addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(PdCodesApiPluginId).then(function (config) {
+                    page.querySelector('#ApiBaseUrl').value = config.ApiBaseUrl || '';
+                    page.querySelector('#PreferredLanguage').value = config.PreferredLanguage || '';
+                    page.querySelector('#Country').value = config.Country || '';
+                    page.querySelector('#AcceptUncertainMatches').checked = config.AcceptUncertainMatches === true;
+                    // "!== false" for the same reason as AbsoluteNumberingFallback below:
+                    // PreferAnimeForSeries defaults to TRUE in PluginConfiguration.
+                    page.querySelector('#PreferAnimeForSeries').checked = config.PreferAnimeForSeries !== false;
+                    page.querySelector('#PreferAnimeForMovies').checked = config.PreferAnimeForMovies === true;
+                    // "!== false", not "=== true": this setting defaults to TRUE in
+                    // PluginConfiguration, so a configuration saved by an older build - which
+                    // has no such key at all - must render as checked. "=== true" would show
+                    // it off while the plugin was in fact using it, and the first save would
+                    // then persist an off it was never told to turn off.
+                    page.querySelector('#AbsoluteNumberingFallback').checked = config.AbsoluteNumberingFallback !== false;
+                    page.querySelector('#RequestTimeoutSeconds').value = config.RequestTimeoutSeconds || 30;
+                    Dashboard.hideLoadingMsg();
+                });
+            });
+
+            page.querySelector('#PdCodesApiConfigForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+
+                // Read-modify-write rather than posting a fresh object: the configuration
+                // may carry keys a newer build added, and replacing it wholesale would
+                // silently reset them.
+                ApiClient.getPluginConfiguration(PdCodesApiPluginId).then(function (config) {
+                    // Trailing slashes are stripped server-side too; doing it here as well
+                    // keeps the stored value identical to what the user will see in logs.
+                    config.ApiBaseUrl = page.querySelector('#ApiBaseUrl').value.trim().replace(/\/+$/, '');
+                    config.PreferredLanguage = page.querySelector('#PreferredLanguage').value.trim();
+                    config.Country = page.querySelector('#Country').value.trim().toUpperCase();
+                    config.AcceptUncertainMatches = page.querySelector('#AcceptUncertainMatches').checked;
+                    config.PreferAnimeForSeries = page.querySelector('#PreferAnimeForSeries').checked;
+                    config.PreferAnimeForMovies = page.querySelector('#PreferAnimeForMovies').checked;
+                    config.AbsoluteNumberingFallback = page.querySelector('#AbsoluteNumberingFallback').checked;
+
+                    var timeout = parseInt(page.querySelector('#RequestTimeoutSeconds').value, 10);
+                    config.RequestTimeoutSeconds = isNaN(timeout) ? 30 : timeout;
+
+                    ApiClient.updatePluginConfiguration(PdCodesApiPluginId, config)
+                        .then(Dashboard.processPluginConfigurationUpdateResult);
+                });
+
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>
