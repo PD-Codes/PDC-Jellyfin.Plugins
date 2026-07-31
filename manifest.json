@@ -12,9 +12,9 @@
         "version": "1.0.0.0",
         "changelog": "Initial release. Movie, Series and Episode metadata; poster/backdrop/logo and episode-still images; search; id-based identification using the namespaced tmdb_movie/tmdb_tv and tvdb_series/tvdb_movie sources.",
         "targetAbi": "10.10.0.0",
-        "sourceUrl": "https://github.com/PD-Codes/PDC-Jellyfin.Plugins/releases/download/pdcodesapi-v1.0.0.0/pdcodesapi.zip",
-        "checksum": "REPLACE-WITH-MD5-OF-THE-ZIP",
-        "timestamp": "REPLACE-AFTER-RELEASE"
+        "sourceUrl": "https://github.com/PD-Codes/PDC-Jellyfin.Plugins/releases/download/pdcodesapi-v1.0.0.1/pdcodesapi.zip",
+        "checksum": "0d4268bed9b8948771f27f562f19dbeb",
+        "timestamp": "2026-07-31T21:26:47Z"
       }
     ]
   }
