@@ -296,6 +296,20 @@ jobs:
         # this run. The already-built ZIP sits in the workspace as an untracked file and
         # is unaffected by the branch switch, so its checksum stays valid.
         if: steps.gate.outputs.should_run == 'true' && steps.publish_release.outcome == 'success'
+        env:
+          # Passed as env vars, NOT interpolated into the run script via ${{ }} - GitHub
+          # Actions substitutes ${{ }} as raw text into the command BEFORE the shell parses
+          # it. The changelog is human-written prose and routinely contains double quotes
+          # (`the "tv" type`, say); inlined directly it closes the surrounding shell quotes
+          # early and the rest of the changelog is re-split into extra argv entries, which
+          # is exactly what happened here ("expects 7 arguments; got 9"). An env var's value
+          # is handed to the process as-is via the OS, with no shell re-parsing of its
+          # contents - safe for arbitrary quotes, newlines, `$`, backticks, whatever a
+          # changelog entry happens to contain.
+          GUID: ${{ steps.meta.outputs.guid }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          CHANGELOG: ${{ steps.meta.outputs.changelog }}
+          TARGET_ABI: ${{ steps.meta.outputs.target_abi }}
         run: |
           set -euo pipefail
 
@@ -309,15 +323,15 @@ jobs:
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ZIP}"
 
-          echo "Updating manifest.json: guid=${{ steps.meta.outputs.guid }} version=${{ steps.meta.outputs.version }} checksum=$MD5"
+          echo "Updating manifest.json: guid=$GUID version=$VERSION checksum=$MD5"
           python3 .github/scripts/update_manifest.py \
-            "${{ steps.meta.outputs.guid }}" \
-            "${{ steps.meta.outputs.version }}" \
+            "$GUID" \
+            "$VERSION" \
             "$MD5" \
             "$TIMESTAMP" \
             "$SOURCE_URL" \
-            "${{ steps.meta.outputs.changelog }}" \
-            "${{ steps.meta.outputs.target_abi }}"
+            "$CHANGELOG" \
+            "$TARGET_ABI"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
