@@ -99,11 +99,19 @@ public sealed class Work
     [JsonPropertyName("titles")]
     public IReadOnlyList<TitleEntry>? Titles { get; set; }
 
+    /// <remarks>
+    /// See <see cref="MixedTypeStringDictionaryConverter"/>: the v5 contract sends some ids
+    /// (mal, anilist, tmdb_tv, tvdb_series, ...) as JSON numbers and others (wikidata, imdb,
+    /// animeplanet, ...) as JSON strings, in the SAME object. A plain
+    /// <c>Dictionary&lt;string, string&gt;</c> throws on the first numeric value.
+    /// </remarks>
     [JsonPropertyName("external_ids")]
+    [JsonConverter(typeof(MixedTypeStringDictionaryConverter))]
     public Dictionary<string, string>? ExternalIds { get; set; }
 
     /// <summary>Gets or sets ids matched by title only. Guesses; never written back as fact.</summary>
     [JsonPropertyName("uncertain_external_ids")]
+    [JsonConverter(typeof(MixedTypeStringDictionaryConverter))]
     public Dictionary<string, string>? UncertainExternalIds { get; set; }
 
     [JsonPropertyName("year")]
