@@ -9,6 +9,14 @@
     "imageUrl": "",
     "versions": [
       {
+        "version": "1.0.0.3",
+        "changelog": "1.0.0.3 - Fixed deserialization of external_ids (and uncertain_external_ids): the v5 contract sends some ids (mal, anilist, tmdb_tv, tvdb_series, ...) as JSON numbers and others (wikidata, imdb, animeplanet, ...) as JSON strings in the same object, and the plugin's plain Dictionary<string, string> threw a JsonException on the first numeric value it met - which every /v5/search result now hits, now that search actually returns populated results. A new MixedTypeStringDictionaryConverter accepts either token type and normalizes numbers to their string form. This is what was crashing Identify searches with \"Cannot get the value of a token type 'Number' as a string.\"\n1.0.0.2 - Fixed GetSearchResults on the Movie and Series providers: each candidate type (movie/anime, anime/tv) is now tried and caught separately instead of sharing one try/catch around the whole loop. Previously a slow or failing type (e.g. \"tv\") could discard search results already found for another type (e.g. \"anime\") in the same request, so Jellyfin's Identify dialog showed nothing at all for titles the API actually had - \"Happy Sugar Life\" was the case that surfaced it. Also includes 1.0.0.1's automatic manifest.json update on release (no plugin behavior change).\n1.0.0.0 - Initial release. Movie, Series and Episode metadata; poster/backdrop/logo and episode-still images; search; id-based identification using the namespaced tmdb_movie/tmdb_tv and tvdb_series/tvdb_movie sources.",
+        "targetAbi": "10.10.0.0",
+        "sourceUrl": "https://github.com/PD-Codes/PDC-Jellyfin.Plugins/releases/download/pdcodesapi-v1.0.0.3/pdcodesapi.zip",
+        "checksum": "2bb68abc3544a3a78c72757649d4ae83",
+        "timestamp": "2026-08-01T15:05:21Z"
+      },
+      {
         "version": "1.0.0.2",
         "changelog": "Fixed GetSearchResults on the Movie and Series providers: each candidate type (movie/anime, anime/tv) is now tried and caught separately instead of sharing one try/catch around the whole loop. Previously a slow or failing type (e.g. \"tv\") could discard search results already found for another type (e.g. \"anime\") in the same request, so Jellyfin's Identify dialog showed nothing at all for titles the API actually had - \"Happy Sugar Life\" was the case that surfaced it. Also includes 1.0.0.1's automatic manifest.json update on release (no plugin behavior change).",
         "targetAbi": "10.10.0.0",
