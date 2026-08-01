@@ -8,7 +8,7 @@
 # server treats an upgrade as a second plugin).
 name: "PD-Codes API"
 guid: "3f9c2a17-8d54-4e63-b0a1-5c7de2149f8b"
-version: "1.0.0.0"
+version: "1.0.0.2"
 
 # targetAbi is the MINIMUM server version. 10.10.0.0 because every interface this plugin
 # implements was verified against 10.10.6 and 10.9 differs (notably IExternalId, where
@@ -30,6 +30,14 @@ artifacts:
   - "Jellyfin.Plugin.PdCodesApi.dll"
 
 changelog: >
+  1.0.0.2 - Fixed GetSearchResults on the Movie and Series providers: each candidate
+  type (movie/anime, anime/tv) is now tried and caught separately instead of sharing
+  one try/catch around the whole loop. Previously a slow or failing type (e.g. "tv")
+  could discard search results already found for another type (e.g. "anime") in the
+  same request, so Jellyfin's Identify dialog showed nothing at all for titles the
+  API actually had - "Happy Sugar Life" was the case that surfaced it. Also includes
+  1.0.0.1's automatic manifest.json update on release (no plugin behavior change).
+
   1.0.0.0 - Initial release. Movie, Series and Episode metadata; poster/backdrop/logo
   and episode-still images; search; id-based identification using the namespaced
   tmdb_movie/tmdb_tv and tvdb_series/tvdb_movie sources.

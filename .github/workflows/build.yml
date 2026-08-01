@@ -18,13 +18,22 @@ name: build
 # so there is no way to stop the OTHER jobs being scheduled at all) but every one of its
 # steps is skipped via the gate step below, so nothing is built or released for them.
 #
-# AFTER a release is published, the workflow ALSO updates manifest.json itself: it fills
-# in checksum/timestamp/sourceUrl on the matching plugin+version entry using
+# AFTER a release is published, the workflow ALSO updates manifest.json itself using
 # .github/scripts/update_manifest.py, commits as github-actions[bot], and pushes straight
-# to "main". It deliberately does NOT invent a new versions[] entry or a new plugin
-# entry - changelog text is a human decision, not something to synthesize - so the
-# entry for the version being released must already exist in manifest.json (added by
-# hand before tagging) or this step fails loudly rather than guess at it.
+# to "main". As of the tag-vs-version incident below, this now CREATES the versions[]
+# entry too (changelog + targetAbi come from build.yaml, read once by the "Read
+# build.yaml" step below) if one for this version does not exist yet - it still refuses
+# outright if the plugin's GUID has no entry in manifest.json at all, which needs a
+# one-time by-hand base entry (name/description/owner/category - see plugins/README.md).
+#
+# THE TAG-VS-BUILD.YAML.VERSION CHECK. Three real tags - pdcodesapi-v1.0.0.0, -v1.0.0.1,
+# -v1.0.0.2 - were pushed while build.yaml's "version" stayed "1.0.0.0" the whole time.
+# Nothing caught it: a tag push was only checked against the PATTERN "<prefix>-v*", and a
+# manual dispatch's release_tag was only checked for the right prefix. Every one of those
+# three ZIPs had the same assembly version baked in, so Jellyfin never saw anything to
+# update to, no matter how many releases were cut. The "Verify release tag matches
+# build.yaml version" step below is what closes that gap - it fails the run outright if
+# the tag being released does not equal "<tag_prefix>-v" + build.yaml's version.
 
 on:
   push:
@@ -102,6 +111,43 @@ jobs:
         if: steps.gate.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
+      - name: Read build.yaml (${{ matrix.plugin.id }})
+        # ONE parsed source for guid/version/changelog/targetAbi, used below both by the
+        # tag-consistency check and by the manifest update step. Real YAML parsing (not
+        # grep/sed) because `changelog: >` is a folded block scalar - grep/sed can only
+        # safely pull single-line scalars like guid/version, which is exactly how this
+        # workflow used to read them, and exactly why nothing ever caught build.yaml's
+        # version drifting away from the git tag being released.
+        if: steps.gate.outputs.should_run == 'true'
+        id: meta
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml
+          META=$(python3 .github/scripts/extract_build_meta.py "plugins/${{ matrix.plugin.id }}/build.yaml")
+          echo "guid=$(echo "$META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["guid"])')" >> "$GITHUB_OUTPUT"
+          echo "version=$(echo "$META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')" >> "$GITHUB_OUTPUT"
+          echo "target_abi=$(echo "$META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["targetAbi"])')" >> "$GITHUB_OUTPUT"
+          {
+            echo 'changelog<<CHANGELOG_EOF'
+            echo "$META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["changelog"])'
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag (${{ matrix.plugin.id }})
+        # Moved ahead of the build steps (it used to sit right before the release step) so
+        # the tag-consistency check below has it available before anything is built. Tag-
+        # push and manual-dispatch releases need the tag from different places: a tag push
+        # already has it in the ref, a manual dispatch has no ref to read it from and must
+        # use the "release_tag" input instead.
+        if: steps.gate.outputs.should_run == 'true'
+        id: resolve_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag_name=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Validate manual release tag (${{ matrix.plugin.id }})
         # Only reached on a manual dispatch of THIS plugin that also asked for a release.
         # Refuses a release_tag that does not start with THIS plugin's own prefix - e.g.
@@ -121,6 +167,32 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Verify release tag matches build.yaml version (${{ matrix.plugin.id }})
+        # THE CHECK THAT WAS MISSING. Nothing previously compared the tag being released
+        # against build.yaml's own "version" field - a tag push only had to match the
+        # PATTERN "<prefix>-v*", not any particular version, and a manual dispatch's
+        # release_tag was only checked for the right prefix (immediately above). It is
+        # entirely possible to bump nothing in build.yaml, push a new tag anyway, and get a
+        # release whose ZIP's actual assembly version is unchanged - which is exactly what
+        # happened across pdcodesapi-v1.0.0.0, -v1.0.0.1 and -v1.0.0.2: three tags, one real
+        # version (1.0.0.0), so Jellyfin never saw anything to update to.
+        #
+        # Only runs when this matrix entry is actually about to be released (same condition
+        # as the "Publish GitHub Release" step below) - a plain CI build on a branch push or
+        # PR has no release tag to compare against and must not be gated on one.
+        if: >
+          steps.gate.outputs.should_run == 'true'
+          && (startsWith(github.ref, format('refs/tags/{0}-v', matrix.plugin.tag_prefix))
+              || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''))
+        run: |
+          set -euo pipefail
+          EXPECTED="${{ matrix.plugin.tag_prefix }}-v${{ steps.meta.outputs.version }}"
+          ACTUAL="${{ steps.resolve_tag.outputs.tag_name }}"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Release tag '$ACTUAL' does not match build.yaml's version ($EXPECTED expected). Bump 'version:' in plugins/${{ matrix.plugin.id }}/build.yaml to match the tag before releasing - otherwise the built ZIP's own assembly version does not change and Jellyfin will never offer this as an update."
+            exit 1
+          fi
 
       - name: Set up .NET 8
         # Jellyfin 10.10.x targets .NET 8. Building against a newer SDK's default
@@ -175,20 +247,6 @@ jobs:
           name: jellyfin-plugin-${{ matrix.plugin.tag_prefix }}
           path: ${{ matrix.plugin.zip_name }}
           if-no-files-found: error
-
-      - name: Resolve release tag (${{ matrix.plugin.id }})
-        # Tag-push and manual-dispatch releases need the tag from different places: a
-        # tag push already has it in the ref, a manual dispatch has no ref to read it
-        # from and must use the "release_tag" input instead. Computed once here so the
-        # release step below has a single, uniform value regardless of which triggered it.
-        if: steps.gate.outputs.should_run == 'true'
-        id: resolve_tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag_name=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Publish GitHub Release (${{ matrix.plugin.id }})
         # Gated on: this matrix entry being the selected plugin, AND EITHER a tag push
@@ -247,16 +305,19 @@ jobs:
 
           ZIP="${{ matrix.plugin.zip_name }}"
           MD5=$(md5sum "$ZIP" | cut -d' ' -f1)
-          GUID=$(grep -m1 '^guid:' "plugins/${{ matrix.plugin.id }}/build.yaml" \
-            | sed -E 's/^guid:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/')
-          VERSION=$(grep -m1 '^version:' "plugins/${{ matrix.plugin.id }}/build.yaml" \
-            | sed -E 's/^version:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/')
           TAG="${{ steps.resolve_tag.outputs.tag_name }}"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ZIP}"
 
-          echo "Updating manifest.json: guid=$GUID version=$VERSION checksum=$MD5"
-          python3 .github/scripts/update_manifest.py "$GUID" "$VERSION" "$MD5" "$TIMESTAMP" "$SOURCE_URL"
+          echo "Updating manifest.json: guid=${{ steps.meta.outputs.guid }} version=${{ steps.meta.outputs.version }} checksum=$MD5"
+          python3 .github/scripts/update_manifest.py \
+            "${{ steps.meta.outputs.guid }}" \
+            "${{ steps.meta.outputs.version }}" \
+            "$MD5" \
+            "$TIMESTAMP" \
+            "$SOURCE_URL" \
+            "${{ steps.meta.outputs.changelog }}" \
+            "${{ steps.meta.outputs.target_abi }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""Fills in checksum/timestamp/sourceUrl on an EXISTING manifest.json version entry.
+"""Updates or creates a manifest.json version entry after a GitHub Release is published.
 
-Called by .github/workflows/build.yml right after a GitHub Release is published, once
-per plugin, with the plugin's own GUID, version, ZIP checksum, release timestamp and
-release asset URL. It deliberately does not invent a new plugin entry or a new
-versions[] entry: a plugin manifest.json has never heard of, or a version with no
-changelog text yet, both need a human decision (what does this release say it does),
-and guessing that from a build number would be exactly the kind of silent, low-effort
-correctness this project's plugins are built to avoid, applied to the repository's own
-tooling instead of to a plugin's data.
+Called by .github/workflows/build.yml once per plugin, with the plugin's own GUID,
+version, ZIP checksum, release timestamp, release asset URL, changelog text and
+targetAbi - the last two coming straight out of that plugin's build.yaml (see
+extract_build_meta.py), which is the file a human already edits to bump the version, so
+the changelog is still 100% human-authored, just no longer duplicated into manifest.json
+by hand as a second step.
 
-Usage: update_manifest.py <guid> <version> <checksum> <timestamp> <source_url>
+If the plugin's GUID has no entry in manifest.json AT ALL, this still refuses rather than
+inventing name/description/owner/category out of nothing - that base entry is a one-time,
+by-hand addition (see plugins/README.md). But if the GUID exists and the VERSION does not
+yet have a versions[] entry, one is now created (from changelog/targetAbi) and inserted at
+the front - manifest.json lists newest first, matching the existing file's convention.
+
+If the version entry already exists (e.g. this script re-runs for the same release), only
+checksum/timestamp/sourceUrl are refreshed - changelog/targetAbi on an EXISTING entry are
+left as they are, in case they were hand-edited in manifest.json after publishing (a typo
+fix, say) and should not be silently overwritten by whatever build.yaml says today.
+
+Usage: update_manifest.py <guid> <version> <checksum> <timestamp> <source_url> <changelog> <target_abi>
 """
 
 import json
@@ -18,16 +27,16 @@ import sys
 
 
 def main() -> int:
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 8:
         print(
-            "::error::update_manifest.py expects exactly 5 arguments "
-            "(guid, version, checksum, timestamp, source_url); "
+            "::error::update_manifest.py expects exactly 7 arguments "
+            "(guid, version, checksum, timestamp, source_url, changelog, target_abi); "
             f"got {len(sys.argv) - 1}.",
             file=sys.stderr,
         )
         return 1
 
-    guid, version, checksum, timestamp, source_url = sys.argv[1:6]
+    guid, version, checksum, timestamp, source_url, changelog, target_abi = sys.argv[1:8]
 
     with open("manifest.json", encoding="utf-8") as f:
         data = json.load(f)
@@ -41,29 +50,35 @@ def main() -> int:
         )
         return 1
 
-    entry = next(
-        (v for v in plugin.get("versions", []) if v.get("version") == version),
-        None,
-    )
-    if entry is None:
-        print(
-            f"::error::No versions[] entry for {version} under guid {guid}. Add one by hand "
-            "(version/changelog/targetAbi) before tagging - this script only fills in "
-            "checksum/timestamp/sourceUrl on an entry that already exists, it does not invent "
-            "changelog text.",
-            file=sys.stderr,
-        )
-        return 1
+    plugin.setdefault("versions", [])
+    entry = next((v for v in plugin["versions"] if v.get("version") == version), None)
 
-    entry["checksum"] = checksum
-    entry["timestamp"] = timestamp
-    entry["sourceUrl"] = source_url
+    if entry is None:
+        entry = {
+            "version": version,
+            "changelog": changelog,
+            "targetAbi": target_abi,
+            "sourceUrl": source_url,
+            "checksum": checksum,
+            "timestamp": timestamp,
+        }
+        # Newest first, matching manifest.json's existing ordering - Jellyfin itself does
+        # not require any particular order, but a human scanning the file for "what's
+        # current" should not have to read to the bottom.
+        plugin["versions"].insert(0, entry)
+        created = True
+    else:
+        entry["checksum"] = checksum
+        entry["timestamp"] = timestamp
+        entry["sourceUrl"] = source_url
+        created = False
 
     with open("manifest.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
 
-    print(f"manifest.json updated: {guid} v{version} checksum={checksum}")
+    action = "created" if created else "updated"
+    print(f"manifest.json {action}: {guid} v{version} checksum={checksum}")
     return 0
 
 
