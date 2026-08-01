@@ -150,28 +150,45 @@ public class PdCodesMovieProvider : IRemoteMetadataProvider<Movie, MovieInfo>, I
         var client = new PdCodesApiClient(_httpClientFactory, _logger);
         var results = new List<RemoteSearchResult>();
 
-        try
+        // /v5/search here rather than /v5/search-name: the manual identify screen shows a
+        // poster and a year next to each candidate, and search-name returns ids only.
+        // This is the one place the larger payload earns its cost.
+        //
+        // Each type is tried and caught SEPARATELY, on purpose. MovieTypes() tries both
+        // "movie" and "anime", and the two are unrelated queries against unrelated parts
+        // of the catalog - one being slow, timing out or erroring says nothing about the
+        // other. A single try/catch around the whole loop discarded whatever the FIRST
+        // type had already found the moment the SECOND type failed: a real, fast hit for
+        // "anime" was thrown away because "movie" timed out a moment later, and Jellyfin's
+        // Identify dialog showed nothing at all for a title the API actually had. Catching
+        // per type keeps a slow or failing type from erasing a good result from another.
+        foreach (var type in PdCodesIds.MovieTypes())
         {
-            // /v5/search here rather than /v5/search-name: the manual identify screen
-            // shows a poster and a year next to each candidate, and search-name returns
-            // ids only. This is the one place the larger payload earns its cost.
-            foreach (var type in PdCodesIds.MovieTypes())
+            try
             {
                 var hits = await client
                     .SearchAsync(searchInfo.Name, type, searchInfo.MetadataLanguage, cancellationToken)
                     .ConfigureAwait(false);
                 results.AddRange(hits.Select(w => ToSearchResult(w, isMovieShaped: true)));
             }
-        }
-        catch (PdCodesApiException ex)
-        {
-            _logger.LogError(ex, "PD-Codes API v5 search failed for '{Name}'.", searchInfo.Name);
-            return Array.Empty<RemoteSearchResult>();
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "Could not reach the PD-Codes API searching for '{Name}'.", searchInfo.Name);
-            return Array.Empty<RemoteSearchResult>();
+            catch (PdCodesApiException ex)
+            {
+                _logger.LogError(ex, "PD-Codes API v5 search ({Type}) failed for '{Name}'.", type, searchInfo.Name);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "Could not reach the PD-Codes API searching ({Type}) for '{Name}'.", type, searchInfo.Name);
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // HttpClient surfaces a timeout as TaskCanceledException. Uncaught, this
+                // used to propagate all the way to Jellyfin's ProviderManager, which logs
+                // "failed to retrieve search results" and reports the WHOLE provider as
+                // having nothing - even when another type in this same loop had already
+                // found the work. The guard tells a timeout apart from the user actually
+                // cancelling the search.
+                _logger.LogError(ex, "PD-Codes API timed out searching ({Type}) for '{Name}'.", type, searchInfo.Name);
+            }
         }
 
         return results;

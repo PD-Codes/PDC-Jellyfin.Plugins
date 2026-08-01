@@ -125,9 +125,15 @@ public class PdCodesSeriesProvider : IRemoteMetadataProvider<Series, SeriesInfo>
         var client = new PdCodesApiClient(_httpClientFactory, _logger);
         var results = new List<RemoteSearchResult>();
 
-        try
+        // Each type is tried and caught SEPARATELY, on purpose - see PdCodesMovieProvider
+        // .GetSearchResults for the full reasoning. SeriesTypes() tries both "anime" and
+        // "tv"; a single try/catch around the whole loop discarded whatever the FIRST type
+        // had already found the moment the SECOND type failed, which is exactly the shape
+        // of bug that made a genuine "anime" hit disappear from Jellyfin's Identify dialog
+        // because the unrelated "tv" search timed out a moment later.
+        foreach (var type in PdCodesIds.SeriesTypes())
         {
-            foreach (var type in PdCodesIds.SeriesTypes())
+            try
             {
                 var hits = await client
                     .SearchAsync(searchInfo.Name, type, searchInfo.MetadataLanguage, cancellationToken)
@@ -135,16 +141,22 @@ public class PdCodesSeriesProvider : IRemoteMetadataProvider<Series, SeriesInfo>
                 results.AddRange(hits.Select(w =>
                     PdCodesMovieProvider.ToSearchResult(w, isMovieShaped: false)));
             }
-        }
-        catch (PdCodesApiException ex)
-        {
-            _logger.LogError(ex, "PD-Codes API v5 search failed for '{Name}'.", searchInfo.Name);
-            return Array.Empty<RemoteSearchResult>();
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogError(ex, "Could not reach the PD-Codes API searching for '{Name}'.", searchInfo.Name);
-            return Array.Empty<RemoteSearchResult>();
+            catch (PdCodesApiException ex)
+            {
+                _logger.LogError(ex, "PD-Codes API v5 search ({Type}) failed for '{Name}'.", type, searchInfo.Name);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "Could not reach the PD-Codes API searching ({Type}) for '{Name}'.", type, searchInfo.Name);
+            }
+            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // See PdCodesMovieProvider.GetSearchResults: uncaught, this used to
+                // propagate to Jellyfin's ProviderManager and zero out the ENTIRE
+                // provider's results, even when another type in this loop had already
+                // found the work.
+                _logger.LogError(ex, "PD-Codes API timed out searching ({Type}) for '{Name}'.", type, searchInfo.Name);
+            }
         }
 
         return results;
